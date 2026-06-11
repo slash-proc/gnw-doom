@@ -1,0 +1,4 @@
+# Build + flash + debug tooling for gnw-doom.
+gnwmanager          # flashing & SWD debug backend (OpenOCD)
+pyelftools          # scripts/build/gen_reloc_table.py (ELF section parsing)
+littlefs-python     # retro-go-porting-toolkit/scripts/debug/lfs_list.py (optional)

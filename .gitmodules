@@ -1,0 +1,8 @@
+[submodule "rp2040-doom"]
+	path = rp2040-doom
+	url = git@github.com:slash-proc/rp2040-doom.git
+	branch = gnw-stm32h7b0
+[submodule "retro-go-porting-toolkit"]
+	path = retro-go-porting-toolkit
+	url = git@github.com:slash-proc/gnw-retro-go-porting-toolkit.git
+	update = none

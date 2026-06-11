@@ -1,0 +1,42 @@
+# --- WADs (licensing) -------------------------------------------------------
+# The shareware IWAD is the one WAD id Software permits redistributing;
+# every other WAD (registered/Ultimate/re-release/DOOM II) must stay untracked.
+**/*.wad
+!/doom1-shareware.wad
+# WHD/WHX are WAD-derived: same licensing rule, and reproducible via whd_gen.
+*.whd
+*.whx
+
+# --- build outputs ------------------------------------------------------------
+build/
+build-host/
+*.bin
+*.o
+*.d
+*.out
+*.map
+*.elf
+
+# --- python -------------------------------------------------------------------
+__pycache__/
+*.pyc
+
+# --- editors ------------------------------------------------------------------
+# vim/nvim swap + persistence
+*.sw[a-p]
+*~
+.*.un~
+.netrwhist
+# emacs
+\#*\#
+.\#*
+*.autosave
+# misc editor/session droppings
+tags
+TAGS
+.gdb_history
+.vscode/
+.idea/
+
+# --- local reference clones (not part of the project) --------------------------
+examples/

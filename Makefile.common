@@ -1,0 +1,46 @@
+# gnw-doom — user-facing stages & variables. (All the build machinery lives in
+# the Makefile, which pulls this file in automatically.)
+#
+#   make                      # build doom: doom1.wad if present, else doom1-shareware.wad
+#   make WAD=doom2.wad        # DOOM II -> build/doom2.bin
+#   make WAD=path/to/my.wad   # any IWAD; classified by sha1 (warns if not tested-working)
+#   make build-firmware       # build the test firmware (retro-go-porting-toolkit)
+#   make flash                # build + flash BOTH (firmware -> bank2, doom -> ext flash)
+#   make clean
+#
+# Build DOOM I and DOOM II by invoking make twice.
+
+# === variables ====================================================================
+# Which IWAD to build. doom1-shareware.wad ships in-tree (redistributable);
+# drop your own doom1.wad / doom2.wad next to it.
+WAD ?= $(if $(wildcard doom1.wad),doom1.wad,doom1-shareware.wad)
+
+# Where doom.bin lives in external flash (MB offset, 4K-aligned automatically).
+EXTFLASH_OFFSET_MB ?= 20
+
+# TRACE=1: pipeline tracer (DWT cycle stamps into a 512K AXISRAM ring;
+# pull with scripts/debug/tracepull.py). Costs 512K of zone + ~20cyc/event.
+TRACE ?= 0
+
+# === stages =======================================================================
+all: doom                          # the doom binary for $(WAD)
+
+build-firmware: build/firmware.bin # the test firmware
+
+flash: flash-firmware flash-doom   # build + flash both
+
+flash-firmware: build/firmware.bin
+	gnwmanager flash bank$(INTFLASH_BANK) --file build/firmware.bin
+
+flash-doom: doom
+	gnwmanager flash ext $(OUTBIN) --offset $(EXTFLASH_OFFSET_ALIGNED)
+
+# Boot the firmware in its bank (no power cycle needed).
+start-app:
+	gnwmanager start bank$(INTFLASH_BANK)
+
+flash-dummy: dummy.bin
+	st-flash --reset write dummy.bin 0x8000000
+
+clean:
+	rm -rf build/* build-host
