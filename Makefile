@@ -161,16 +161,13 @@ DEFS_DOOM_TINY = \
 
 DEFS_RENDER = -DPICODOOM_RENDER_NEWHOPE=1 -DMERGE_DISTSCALE0_INTO_VIEWCOSSINANGLE=1
 
-# Present-rate cap (build knob; 35 = doom tic rate). Game logic stays 35 Hz.
-DOOM_MAX_FPS ?= 35
-
 # Display/menu name: the on-device file stem ("<GNW_NAME>.bin" in the homebrew
 # list, "<GNW_NAME>.png" cover art, "<GNW_NAME>.whd" data). Baked into the
 # payload as the WHD path. Default = the build artifact stem (doom/doom2).
 GNW_NAME ?= $(notdir $(basename $(OUTBIN)))
 
 DEFS_GNW = -DPICO_ON_DEVICE=1 -DPICO_BUILD=1 -DNO_USE_MOUSE=1 \
-    -DDOOM_MAX_FPS=$(DOOM_MAX_FPS) \
+    \
     -DDOOMX=1 -DDOOMX_SINGLE_CORE=1 -DDOOM_WIDE_PTRS=1 \
     -DDOOM_SAVE_SLOTS=3 -DDOOM_SAVE_AUTONAME=1 \
     -DEXTFLASH_OFFSET=$(EXTFLASH_OFFSET) \

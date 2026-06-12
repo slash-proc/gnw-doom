@@ -24,9 +24,6 @@ WAD ?= $(if $(wildcard doom1.wad),doom1.wad,doom1-shareware.wad)
 # the files just live in /roms/homebrew/.
 EXTFLASH_OFFSET_MB ?= 20
 
-# Present-rate cap (frames/sec; game tics stay 35 Hz). Try DOOM_MAX_FPS=70.
-DOOM_MAX_FPS ?= 35
-
 # TRACE=1: pipeline tracer (DWT cycle stamps into a 512K AXISRAM ring;
 # pull with scripts/debug/tracepull.py). Costs 512K of zone + ~20cyc/event.
 TRACE ?= 0

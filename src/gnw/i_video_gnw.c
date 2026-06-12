@@ -65,10 +65,6 @@ static void ltdc_push_clut256(const uint32_t *rgb888)
 extern void  lcd_setup_framebuffers(int lcd_mode);
 extern void *lcd_get_active_buffer(void);
 extern void  lcd_swap(void);
-
-#ifndef DOOM_MAX_FPS
-#define DOOM_MAX_FPS 35   /* presents per second; game tics stay 35 Hz */
-#endif
 #define LCD_MODE_LUT8 1
 void I_UpdateSound(void);
 void I_GetEvent(void);
@@ -603,10 +599,8 @@ void I_DisplayFrameReady(void)
 // Called by pd_end_frame where the display_frame_freed wait was. Upstream's
 // 60 Hz scanout throttled presents; without a throttle the loop re-renders
 // duplicate frames between 35 Hz tics (measured 71 fps, half the CPU wasted).
-// Pace presents to DOOM_MAX_FPS (default 35 = the tic rate; build with e.g.
-// DOOM_MAX_FPS=70 to experiment — game LOGIC stays at 35 Hz tics, extra
-// frames re-render the same tic). Fractional accumulation keeps the average
-// exact. Idle time feeds the SAI buffer and the perf overlay's CPU%.
+// Pace presents to doom's 35 Hz tic rate: 28.571 ms fractional (28 + 4/7),
+// doomgeneric-style. Idle time feeds the SAI buffer and the perf overlay CPU%.
 void I_DisplayFrameFreedWait(void)
 {
     void perf_note_idle(int ms);
@@ -629,14 +623,13 @@ void I_DisplayFrameFreedWait(void)
         // Wipe frames present at ~60 Hz like the RP2040's scanout did —
         // at 35 fps the melt ran 1.7x slower than upstream and read as a
         // hitch. Wipe frames are cheap (no 3D render behind them).
-        uint32_t wipe_ms = 1000u / DOOM_MAX_FPS;
-        next_ms += (wipe_ms > 17u) ? 17u : wipe_ms;
+        next_ms += 17;
     } else {
-        next_ms += 1000u / DOOM_MAX_FPS;
-        frac += 1000u % DOOM_MAX_FPS;
-        if (frac >= DOOM_MAX_FPS) {
-            frac -= DOOM_MAX_FPS;
-            next_ms += 1;
+        next_ms += 28;
+        frac += 4;
+        if (frac >= 7) {
+            frac -= 7;
+            next_ms += 1;   // 28 + 4/7 ms = 1000/35
         }
     }
     I_UpdateSound();

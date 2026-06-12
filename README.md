@@ -63,8 +63,7 @@ segment to its final address — **no code executes from external flash and
 nothing is relocated**. The WHD game data is a separate file mapped at runtime
 through the firmware ABI. Numbers below are the Ultimate DOOM build (doom2 is
 identical apart from the WHD). Tunables (all linker-`ASSERT`ed): the ITCM/DTCM
-object lists in `linker.ld`, `PATCH_CACHE_BYTES`, `TEXT_AXIS_ORIGIN`, and
-`DOOM_MAX_FPS`.
+object lists in `linker.ld`, `PATCH_CACHE_BYTES` and `TEXT_AXIS_ORIGIN`.
 
 ```
 ══════════════════ ITCM 64K @ 0x00000000 — zero-wait code ══════════════════
