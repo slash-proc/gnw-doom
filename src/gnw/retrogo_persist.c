@@ -59,6 +59,17 @@ extern unsigned long _pcache_start, _pcache_end;
 // the ABI-routed firmware service).
 extern const uint32_t *I_GetClut(void);
 extern void lcd_set_clut(const uint32_t *clut, uint16_t count);
+extern void audio_clear_active_buffer(void);
+extern void audio_clear_inactive_buffer(void);
+
+// The ~730K dump/restore blocks the frame loop for seconds with no mixing;
+// hold the DMA ring silent so it doesn't loop (paired with wdog_refresh).
+static void io_keepalive(void)
+{
+    gnw_abi()->wdog_refresh();
+    audio_clear_active_buffer();
+    audio_clear_inactive_buffer();
+}
 
 #define STATE_MAGIC   0x31535344u   // "DSS1"
 #define STATE_VERSION 3u            // v3: +.pcache region (consistent cache index)
@@ -171,7 +182,7 @@ static void state_save(const char *path)
         uint32_t left = h.region[r].len;
         while (ok && left) {
             uint32_t n = left > CHUNK ? CHUNK : left;
-            gnw_abi()->wdog_refresh();   // ~580K to flash: feed the WWDG
+            io_keepalive();              // ~730K to flash: WWDG + audio silence
             ok = fwrite(p, 1, n, f) == n;
             p += n; left -= n;
         }
@@ -227,7 +238,7 @@ static void state_load(const char *path)
         uint32_t left = want.region[r].len;
         while (ok && left) {
             uint32_t n = left > CHUNK ? CHUNK : left;
-            gnw_abi()->wdog_refresh();
+            io_keepalive();
             ok = fread(p, 1, n, f) == n;
             p += n; left -= n;
         }

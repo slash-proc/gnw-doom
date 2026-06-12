@@ -718,4 +718,11 @@ void I_RepaintFrame(void)
     if (display_video_type != VIDEO_TYPE_SAVING)
         new_frame_init_overlays_palette_and_wipe();
     compose_frame();
+    /* Blocking firmware menus (pause menu, savestate slot picker) call this
+     * each redraw but never let doom's mixer run — keep the DMA ring silent
+     * so it doesn't loop the last mixed buffers. */
+    extern void audio_clear_active_buffer(void);
+    extern void audio_clear_inactive_buffer(void);
+    audio_clear_active_buffer();
+    audio_clear_inactive_buffer();
 }

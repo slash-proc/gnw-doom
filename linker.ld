@@ -158,8 +158,18 @@ SECTIONS {
         *(.pcache)
         _pcache_end = .;
     } > PCACHE
-    ASSERT(SIZEOF(.pcache) <= LENGTH(PCACHE),
-           "PATCH_CACHE_BYTES larger than the PCACHE window (0x23000)")
+
+    /* Pipeline trace slot pool (TRACE=1 only; zero-size otherwise) shares the
+     * PCACHE window with the patch cache: a TRACE build shrinks
+     * PATCH_CACHE_BYTES (Makefile) so the pool fits alongside it, leaving the
+     * zone untouched. Holds the N worst frames via priority retention. */
+    .trace_buf (NOLOAD) : {
+        . = ALIGN(8);
+        *(.trace_buf)
+        . = ALIGN(8);
+    } > PCACHE
+    ASSERT(SIZEOF(.pcache) + SIZEOF(.trace_buf) <= LENGTH(PCACHE),
+           "patch cache + trace pool exceed the PCACHE window: lower PATCH_CACHE_BYTES or TRACE_NUM_SLOTS")
 
     /* Cold code + ALL rodata, copied to the top of AXISRAM by stage 1. */
     .text_axis : {
@@ -185,18 +195,8 @@ SECTIONS {
         _doom_bss_vma_end = .;
     } > AXIBSS
 
-    /* Pipeline trace ring (TRACE=1 builds; zero-size otherwise). RAM-overlay
-     * note: the 512K ring of the XIP era no longer fits — TRACE builds shrink
-     * the ring + PATCH_CACHE_BYTES and use priority retention (keep the bad
-     * frames, drop the good ones). */
-    .trace_buf (NOLOAD) : {
-        . = ALIGN(8);
-        *(.trace_buf)
-        . = ALIGN(8);
-    } > AXIBSS
-
     /* Single zone region for rp2040-doom's z_zone (I_ZoneBase). */
-    _zone_start = ADDR(.trace_buf) + SIZEOF(.trace_buf);
+    _zone_start = _doom_bss_vma_end;
     _zone_end = TEXT_AXIS_ORIGIN;
     ASSERT(_zone_end - _zone_start >= ZONE_MIN,
            "zone heap below ZONE_MIN: shrink PATCH_CACHE_BYTES / trace ring, or raise TEXT_AXIS_ORIGIN")

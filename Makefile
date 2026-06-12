@@ -65,9 +65,15 @@ FMT_DEFS :=
 endif
 
 ifeq ($(TRACE),1)
-DEFS_TRACE = -DDOOMX_TRACE=1
+# The trace pool (8 frames x 2048 events ~= 128K) shares the 140K PCACHE
+# window with the patch cache; shrink the cache to ~8K so both fit (slower
+# texture decode during profiling just surfaces MORE slow frames to catch).
+TRACE_PATCH_CACHE_BYTES ?= 0x2000
+DEFS_TRACE = -DDOOMX_TRACE=1 -DPATCH_CACHE_BYTES=$(TRACE_PATCH_CACHE_BYTES)
+LDFLAGS_TRACE =
 else
 DEFS_TRACE =
+LDFLAGS_TRACE =
 endif
 
 # --- sources ---------------------------------------------------------------------
@@ -246,7 +252,7 @@ $(BUILD)/doom1.wad: $(BUILD)/wad-cropped.wad build-host/whd_gen
 
 # --- link --------------------------------------------------------------------------
 $(BUILD)/doom.out: $(OBJS) $(LINKER)
-	$(CC) $(CFLAGS) -T $(LINKER) -Wl,-Map=$(BUILD)/main.map -Wl,--gc-sections -o $@ \
+	$(CC) $(CFLAGS) -T $(LINKER) -Wl,-Map=$(BUILD)/main.map -Wl,--gc-sections $(LDFLAGS_TRACE) -o $@ \
 	-Wl,--start-group $(OBJS) -lgcc -Wl,--end-group
 	@if grep -qE "__cxa_|_ZSt|operator new" $(BUILD)/main.map; then \
 	  echo "ERROR: C++ runtime leakage in link map"; exit 1; fi

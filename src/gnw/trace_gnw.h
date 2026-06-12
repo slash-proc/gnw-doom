@@ -1,8 +1,16 @@
 //
 // Pipeline tracer (build with TRACE=1): every render/audio stage logs
-// begin/end events with the DWT cycle counter (280 MHz, 3.57 ns) into a
-// 512 KB AXISRAM ring buffer; scripts/debug/tracepull.py drains it over SWD
-// and writes the per-frame timing report. Compiled out entirely otherwise.
+// begin/end events with the DWT cycle counter (280 MHz, 3.57 ns). Compiled
+// out entirely otherwise.
+//
+// PRIORITY RETENTION. A flat ring would fill with whatever ran most recently —
+// mostly fast, uninteresting frames. Instead events accumulate per-frame into
+// a small pool of slots; at each frame boundary the just-finished frame is
+// KEPT only if it is slow enough to matter (slower than the fastest frame the
+// pool currently holds, once the pool is full). So the pool converges to the N
+// WORST frames seen across the whole session — exactly the ones worth reading —
+// in a fraction of the RAM a ring would need. scripts/debug/tracepull.py drains
+// it over SWD and writes the per-frame timing report.
 //
 #ifndef DOOMX_TRACE_GNW_H
 #define DOOMX_TRACE_GNW_H
@@ -43,23 +51,49 @@ typedef struct {
     uint16_t arg;
 } trace_entry_t;
 
-// 256 KB / 8 = 32768 entries (~10-18 s of full-detail tracing); sized so
-// the patch pixel cache and the ring coexist in AXISRAM.
-#define TRACE_ENTRIES 32768u
-extern trace_entry_t trace_buf[TRACE_ENTRIES];
-extern volatile uint32_t trace_head;   // monotonically increasing; index = head % TRACE_ENTRIES
+// Pool geometry (override with -D). NUM_SLOTS frames retained, each up to
+// SLOT_EVENTS events. Total = NUM_SLOTS * (16 + SLOT_EVENTS*8) bytes.
+//   default 8 * (16 + 2048*8) = ~128 KB — the 8 worst frames at full detail.
+// A frame emitting more than SLOT_EVENTS events is truncated (flagged).
+#ifndef TRACE_NUM_SLOTS
+#define TRACE_NUM_SLOTS  8u
+#endif
+#ifndef TRACE_SLOT_EVENTS
+#define TRACE_SLOT_EVENTS 2048u
+#endif
+
+typedef struct {
+    uint32_t frame_no;   // sequential id of the frame this slot holds
+    uint32_t dur_cyc;    // frame wall time (FRAME_MARK..next FRAME_MARK)
+    uint32_t count;      // events stored (<= TRACE_SLOT_EVENTS)
+    uint32_t truncated;  // events dropped past SLOT_EVENTS
+    trace_entry_t ev[TRACE_SLOT_EVENTS];
+} trace_slot_t;
+
+// The slot pool + the index of the slot the in-progress frame writes into.
+extern trace_slot_t trace_slots[TRACE_NUM_SLOTS];
+extern volatile uint32_t trace_stage;   // staging slot index
 
 void trace_init(void);
+// Called at each present boundary (FRAME_MARK): score the finished frame and
+// either keep it (evicting the fastest kept frame when full) or discard it.
+void trace_frame_boundary(uint32_t cyc);
 
 static inline void trace_emit(uint16_t ev, uint16_t arg)
 {
-    extern volatile uint32_t trace_head;
-    uint32_t h = trace_head;
-    trace_entry_t *e = &trace_buf[h & (TRACE_ENTRIES - 1u)];
-    e->cyc = *(volatile uint32_t *)0xE0001004; // DWT->CYCCNT
-    e->ev = ev;
-    e->arg = arg;
-    trace_head = h + 1;
+    uint32_t c = *(volatile uint32_t *)0xE0001004;   // DWT->CYCCNT (read first)
+    if (ev == TEV_FRAME_MARK)
+        trace_frame_boundary(c);                     // may re-stage
+    trace_slot_t *s = &trace_slots[trace_stage];
+    uint32_t n = s->count;
+    if (n < TRACE_SLOT_EVENTS) {
+        s->ev[n].cyc = c;
+        s->ev[n].ev  = ev;
+        s->ev[n].arg = arg;
+        s->count = n + 1;
+    } else {
+        s->truncated++;
+    }
 }
 
 #define TRACE_EVT(ev, arg) trace_emit((ev), (uint16_t)(arg))
@@ -71,7 +105,8 @@ static inline void trace_init(void) {}
 // Level-load audio pump (functional, not tracing): P_SetupLevel can run long
 // enough to drain the ~85 ms SAI buffer, so the DMA loops a stale tone (the
 // "carried tone" hitch). Pump the mixer between load stages; each stage is well
-// under the buffer. No-op on hosts/upstream (see tracehooks.h).
+// under the buffer. No-op on hosts/upstream (see tracehooks.h). Defined for ALL
+// DOOMX builds, not just TRACE — these are not instrumentation.
 #ifndef __cplusplus
 void I_UpdateSound(void);   // C TUs only; pd_render.cpp has its own extern "C" decl
 void pd_warm_flat_cache(void);
