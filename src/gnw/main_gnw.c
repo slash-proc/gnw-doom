@@ -74,8 +74,6 @@ static void ahb_mpu_init(void)
 
 void doom_start(uint8_t load_state, uint8_t start_paused, int8_t save_slot)
 {
-    (void)load_state; (void)start_paused; (void)save_slot;  // savestate resume: see retrogo_persist.c deferred-load notes
-
     doom_sram_init();
     ahb_mpu_init();
     trace_init();
@@ -101,6 +99,13 @@ void doom_start(uint8_t load_state, uint8_t start_paused, int8_t save_slot)
      * SAI sample rate to what we actually mix at — without it the launcher's
      * leftover rate plays our audio at the wrong speed. */
     gnw_abi()->odroid_system_init(GNW_APPID_HOMEBREW, PICO_SOUND_SAMPLE_FREQ);
+
+    /* Launcher savestate resume: record the launch args; the persist pump
+     * performs the deferred load after the first frame. start_paused is not
+     * honored (no meaningful pause concept before the demo loop). */
+    (void)start_paused;
+    extern void doom_persist_boot_args(uint8_t load_state, int8_t save_slot);
+    doom_persist_boot_args(load_state, save_slot);
 
     // Upstream i_main.c calls I_Init() before D_DoomMain: button GPIO,
     // remote-input mailbox clear, and the handheld key bindings live there.

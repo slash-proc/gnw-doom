@@ -6,11 +6,16 @@
 // "SRAM" region — see i_saveg_gnw.c — which simply rides along inside the
 // snapshot). A savestate file = header + the raw contents of every RAM
 // partition doom owns:
-//   1. DTCM .data            (_doom_data_vma_start .. _doom_data_vma_end)
-//   2. DTCM scratch .bss     (_dtcm_bss_start      .. _dtcm_bss_end)
+//   1. .data                 (_doom_data_vma_start .. _doom_data_vma_end)
+//   2. scratch .dtcm_bss     (_dtcm_bss_start      .. _dtcm_bss_end)
 //   3. AXISRAM .bss + zone   (_doom_bss_vma_start  .. _zone_end)
-// Excluded: the firmware's AHBRAM state, the RAM_UC framebuffers (regenerate),
-// and the DTCM stack (live during restore).
+//   4. .pcache               (_pcache_start        .. _pcache_end)
+// The patch cache MUST ride along: its index (pcache_lump_offset, rover,
+// block bookkeeping) lives in the zone — restoring the index without the
+// cache contents walks inconsistent block headers (watchdog crash on the
+// first render after a launcher-resume restore).
+// Excluded: the firmware's RAM, the framebuffers (regenerate), the stack
+// (live during restore).
 //
 // The callbacks run on doom's stack DEEP inside the overlay menu, so the work
 // is deferred: they just stash the filename and set a flag; doom_persist_pump()
@@ -48,6 +53,7 @@ uint32_t g_doom_time_bias;
 extern unsigned long _doom_data_vma_start, _doom_data_vma_end;
 extern unsigned long _dtcm_bss_start, _dtcm_bss_end;
 extern unsigned long _doom_bss_vma_start, _zone_end;
+extern unsigned long _pcache_start, _pcache_end;
 
 // CLUT re-push after a restore (i_video_gnw.c owns the table; lcd_set_clut is
 // the ABI-routed firmware service).
@@ -55,8 +61,8 @@ extern const uint32_t *I_GetClut(void);
 extern void lcd_set_clut(const uint32_t *clut, uint16_t count);
 
 #define STATE_MAGIC   0x31535344u   // "DSS1"
-#define STATE_VERSION 1u
-#define NUM_REGIONS   3u
+#define STATE_VERSION 3u            // v3: +.pcache region (consistent cache index)
+#define NUM_REGIONS   4u
 
 typedef struct {
     uint32_t magic;
@@ -68,20 +74,23 @@ typedef struct {
     struct { uint32_t addr, len; } region[NUM_REGIONS];
 } state_hdr_t;
 
-// Fingerprint of the running image: a snapshot holds pointers into the XIP
-// text/rodata, so it is only valid for the EXACT build (and install address)
-// that wrote it — the WAD hash alone misses rebuilds of the same WAD. FNV-1a
-// over the first 64K of the image (header, entry, early text), computed once
-// at init.
+// Fingerprint of the running build: a snapshot holds pointers into doom's
+// RAM-resident code (thinker function pointers in the zone) and into the WHD
+// flash mapping, so it is only valid for the EXACT build AND the exact WHD
+// address. FNV-1a over the first 64K of .text_axis (the running code itself —
+// the image has no fixed flash address in the RAM-overlay model), mixed with
+// the WHD mapping address (FrogFS layout / flash-cache placement identity).
+extern unsigned long __text_axis_start__;
+extern const uint8_t *whd_map_base;     // set before doom_persist_init runs
 static uint32_t s_img_crc;
 
 static uint32_t img_fingerprint(void)
 {
-    const uint8_t *p = (const uint8_t *)(0x90000000u + EXTFLASH_OFFSET);
+    const uint8_t *p = (const uint8_t *)&__text_axis_start__;
     uint32_t h = 2166136261u;
     for (uint32_t i = 0; i < 65536u; i++)
         h = (h ^ p[i]) * 16777619u;
-    return h;
+    return h ^ ((uint32_t)(uintptr_t)whd_map_base * 2654435761u);
 }
 
 static void regions_fill(state_hdr_t *h)
@@ -98,6 +107,8 @@ static void regions_fill(state_hdr_t *h)
     h->region[1].len  = (uint32_t)&_dtcm_bss_end - (uint32_t)&_dtcm_bss_start;
     h->region[2].addr = (uint32_t)&_doom_bss_vma_start;
     h->region[2].len  = (uint32_t)&_zone_end - (uint32_t)&_doom_bss_vma_start;
+    h->region[3].addr = (uint32_t)&_pcache_start;
+    h->region[3].len  = (uint32_t)&_pcache_end - (uint32_t)&_pcache_start;
 }
 
 static void hud_msg(const char *s)
@@ -160,6 +171,7 @@ static void state_save(const char *path)
         uint32_t left = h.region[r].len;
         while (ok && left) {
             uint32_t n = left > CHUNK ? CHUNK : left;
+            gnw_abi()->wdog_refresh();   // ~580K to flash: feed the WWDG
             ok = fwrite(p, 1, n, f) == n;
             p += n; left -= n;
         }
@@ -192,6 +204,21 @@ static void state_load(const char *path)
         return;
     }
 
+    // Pre-validate the file size BEFORE the point of no return: a truncated
+    // file (interrupted save) must reject cleanly, not half-restore and die.
+    uint32_t expect = sizeof want;
+    for (uint32_t r = 0; r < want.region_count; r++)
+        expect += want.region[r].len;
+    gnw_abi()->fseek(f, 0, 2 /* SEEK_END */);
+    long fsz = gnw_abi()->ftell(f);
+    gnw_abi()->fseek(f, (long)sizeof want, 0 /* SEEK_SET */);
+    if (fsz != (long)expect) {
+        fclose(f);
+        printf("gnw-doom state: %s rejected (size %d != %u)\n", path, (int)fsz, expect);
+        hud_msg("State file is damaged.");
+        return;
+    }
+
     // Point of no return: rewrite every doom RAM partition. The stack (top of
     // DTCM, reserved by the linker) and firmware AHBRAM are untouched, so this
     // frame's call chain survives; globals/zone become the saved world.
@@ -200,6 +227,7 @@ static void state_load(const char *path)
         uint32_t left = want.region[r].len;
         while (ok && left) {
             uint32_t n = left > CHUNK ? CHUNK : left;
+            gnw_abi()->wdog_refresh();
             ok = fread(p, 1, n, f) == n;
             p += n; left -= n;
         }
@@ -223,10 +251,30 @@ static void state_load(const char *path)
     hud_msg("State loaded.");
 }
 
+// Launcher resume: retro-go starts an app with (load_state, save_slot) when
+// the user picks a savestate from the game list. doom_start records them
+// here; the first pump routes the request through the firmware's own
+// odroid_system_emu_load_state (it builds the slot path and calls our
+// doom_LoadState back), and the restore happens one frame later — the same
+// deferred flow the in-game menu uses.
+static uint8_t s_boot_load_pending;
+static int8_t  s_boot_load_slot;
+
+void doom_persist_boot_args(uint8_t load_state, int8_t save_slot)
+{
+    s_boot_load_pending = load_state ? 1 : 0;
+    s_boot_load_slot = save_slot;
+}
+
 // Called once per frame from I_StartFrame (i_video_gnw.c): stack-shallow,
 // between-frames quiescent point.
 void doom_persist_pump(void)
 {
+    if (s_boot_load_pending && !s_pending) {
+        s_boot_load_pending = 0;
+        printf("gnw-doom state: launcher resume, slot %d\n", (int)s_boot_load_slot);
+        gnw_abi()->odroid_system_emu_load_state((int)s_boot_load_slot);
+    }
     int p = s_pending;
     if (!p) return;
     s_pending = 0;
