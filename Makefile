@@ -203,6 +203,15 @@ $(BUILD)/src/gnw/%.o: src/gnw/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+# GNW_NAME is baked into main_gnw.o (-DGNW_WHD_PATH); a name change must
+# recompile it even though no source changed. Stamp keyed on the name.
+GNW_NAME_STAMP := $(BUILD)/.gnw_name_$(subst $() ,_,$(GNW_NAME))
+$(GNW_NAME_STAMP):
+	@mkdir -p $(BUILD)
+	@rm -f $(BUILD)/.gnw_name_*
+	@touch $@
+$(BUILD)/src/gnw/main_gnw.o: $(GNW_NAME_STAMP)
+
 # --- whd_gen (host tool, shared across variants) + WHD/WHX data -------------------
 # Built directly from the submodule's src/whd_gen (which carries the DOOM II
 # name-stamp fix in the gnw-stm32h7b0 branch). adpcm-lib.c is C-only -> gcc.
