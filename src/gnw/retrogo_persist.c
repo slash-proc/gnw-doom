@@ -127,9 +127,13 @@ static void hud_msg(const char *s)
     players[consoleplayer].message = s;
 }
 
-// --- deferred request, set by the callbacks, executed by the pump -------------
+// Saving runs synchronously in the handler (see doom_SaveState); loading is
+// deferred to the pump. Forward decl so the handler can call the writer.
+static bool state_save(const char *path);
+
+// --- deferred LOAD request, set by the load callback, run by the pump ---------
 static char s_path[64];
-static volatile int s_pending;      // 0 none, 1 save, 2 load
+static volatile int s_pending;      // 0 none, 2 load (save no longer deferred)
 
 // SWD-readable debug cells in ITCM — OUTSIDE the snapshot regions, so they
 // survive a state restore: the last filenames the firmware handed us.
@@ -147,12 +151,15 @@ static void dbg_name(char *dst, const char *src)
 
 static bool doom_SaveState(const char *name)
 {
-    if (!name || strlen(name) >= sizeof s_path) return false;
+    if (!name) return false;
     dbg_name(g_dbg_save_name, name);
-    strcpy(s_path, name);
-    s_pending = 1;
-    hud_msg("Saving state...");
-    return true;
+    // Save SYNCHRONOUSLY, right here. The firmware captures the preview
+    // screenshot and commits storage immediately AFTER the handler returns,
+    // and "Save & quit" calls switch_app (device reset) the moment it's done —
+    // a deferred save would never run (confirmed on-device). Saving only READS
+    // doom's RAM, so it's safe at this menu-stack depth; only LOADING (which
+    // rewrites RAM under the call stack) must defer to I_StartFrame.
+    return state_save(name);
 }
 
 static bool doom_LoadState(const char *name)
@@ -168,13 +175,13 @@ static bool doom_LoadState(const char *name)
 // --- the actual dump/restore (runs at I_StartFrame depth) ---------------------
 #define CHUNK 4096u
 
-static void state_save(const char *path)
+static bool state_save(const char *path)
 {
     state_hdr_t h;
     regions_fill(&h);
 
     void *f = fopen(path, "wb");
-    if (!f) { hud_msg("Save state failed (open)."); return; }
+    if (!f) { hud_msg("Save state failed (open)."); return false; }
 
     bool ok = fwrite(&h, 1, sizeof h, f) == sizeof h;
     for (uint32_t r = 0; ok && r < h.region_count; r++) {
@@ -191,6 +198,7 @@ static void state_save(const char *path)
     printf("gnw-doom state: save %s -> %s\n", path, ok ? "ok" : "FAILED");
     hud_msg(ok ? "State saved." : "Save state failed.");
     if (!ok) remove(path);
+    return ok;
 }
 
 static void state_load(const char *path)
@@ -286,11 +294,9 @@ void doom_persist_pump(void)
         printf("gnw-doom state: launcher resume, slot %d\n", (int)s_boot_load_slot);
         gnw_abi()->odroid_system_emu_load_state((int)s_boot_load_slot);
     }
-    int p = s_pending;
-    if (!p) return;
+    if (!s_pending) return;   // only ever 2 (load); save runs in the handler
     s_pending = 0;
-    if (p == 1) state_save(s_path);
-    else        state_load(s_path);
+    state_load(s_path);
 }
 
 // --- SRAM channel: lightweight settings (volume), as before -------------------
