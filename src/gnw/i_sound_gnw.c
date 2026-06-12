@@ -33,9 +33,18 @@
 typedef struct channel_s channel_t;
 
 // retro-go ping-pong audio: the firmware owns the DMA buffer (two halves); we
-// refill the half it isn't playing, once per flip. AUDIO_LEN = one half = ~42 ms
-// @48 kHz. musicbuf/accbuf are the per-half mixing scratch.
-#define AUDIO_LEN   2048
+// refill the half it isn't playing, once per flip. AUDIO_LEN is ONE half.
+//
+// HARD LIMIT: the firmware's audiobuffer_dma is a FIXED int16[AUDIO_BUFFER_LENGTH*2]
+// = int16[2154] array (gw_audio.h, AUDIO_BUFFER_LENGTH=1077). audio_start_playing(L)
+// makes the firmware ping-pong over 2*L samples and hand back halves at
+// &audiobuffer_dma[L]; we then write L samples there. So 2*L must be <= 2154, i.e.
+// L <= 1077 -- otherwise our refill overruns the array into the firmware state
+// that lives right after it (the savestate slot table _emu_states_buf sits at
+// audiobuffer_dma+0x10d4), which silently zeroed savestate slot selection so every
+// save landed on slot 0. 1024 (power of two, under 1077) also halves the per-refill
+// mix cost vs the old 2048, smoothing the audio CPU spike. ~21 ms/half @48 kHz.
+#define AUDIO_LEN   1024
 #define MIX_SAMPLES AUDIO_LEN
 // Mixer scratch in zero-wait DTCM (CPU-only; the DMA never reads these — only the
 // firmware's pool-slack ping-pong buffer, which out[] writes to). Hot per-sample.
