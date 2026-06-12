@@ -98,10 +98,10 @@ object lists in `linker.ld`, `PATCH_CACHE_BYTES` and `TEXT_AXIS_ORIGIN`.
 0x2404B000 ├────────────────────────────────────────────┤ ← __RAM_EMU_START__
            │ .gwhb  GWHB magic + stage-1       0.3K      │  image loads here,
            │ .bss   (overlaps consumed image)   288K     │  bss zeroed after
-0x24093548 ├────────────────────────────────────────────┤  segments copied out
+0x2409354C ├────────────────────────────────────────────┤  segments copied out
            │ zone heap (z_zone)               203.4K     │  obs. peak ~210K
 0x240C5000 ├────────────────────────────────────────────┤ ← TEXT_AXIS_ORIGIN
-           │ .text_axis  cold code + rodata   228.7K     │  (7.5K slack)
+           │ .text_axis  cold code + rodata   229.3K     │  (6.8K slack)
 0x24100000 └────────────────────────────────────────────┘
 
 ═══════ AHBRAM 128K @ 0x30000000 — D2 SRAM, doom's "fast data" tier ═════════
@@ -109,11 +109,11 @@ object lists in `linker.ld`, `PATCH_CACHE_BYTES` and `TEXT_AXIS_ORIGIN`.
            │ fw audio DMA ring + .ahb head     ~6.4K     │  UNCACHED (fw rgn 0;
            │ (rest of 16K subregion unused)              │  doom rgn 7 skips it)
 0x30004000 ├────────────────────────────────────────────┤ ← doom MPU region 7:
-           │ .dtcm_bss  render scratch          86.1K    │   cacheable WBWA
-0x30019864 │ .data      initialized globals      2.5K    │   (survives the fw's
-0x3001A268 │ .text_dtcm warm code tier          19.6K    │   LUT8 MPU rewrite)
-0x3001F0D8 ├────────────────────────────────────────────┤
-           │ free                                3.8K    │
+           │ .dtcm_bss  render scratch          80.1K    │   cacheable WBWA
+0x30018064 │ .data      initialized globals      2.5K    │   (survives the fw's
+0x30018A68 │ .text_dtcm warm code tier          19.6K    │   LUT8 MPU rewrite)
+0x3001D8D8 ├────────────────────────────────────────────┤
+           │ free                                9.9K    │
 0x30020000 └────────────────────────────────────────────┘
 
 ═════════════════ External flash (XIP @ 0x90000000) ═════════════════════════
