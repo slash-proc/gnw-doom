@@ -49,10 +49,11 @@ OUTWHD := $(OUTBIN:.bin=.whd)
 
 doom: $(OUTBIN) $(OUTWHD)
 
-# Objects land in build/$(VARIANT)/ — keyed on the variant so switching
-# shareware<->ultimate<->enhanced never reuses stale objects (they differ in
-# compile-time defines, not source).
-BUILD := build/$(VARIANT)
+# Objects land in build/$(VARIANT)[-trace]/ — keyed on the variant AND on
+# TRACE so switching either never reuses stale objects (they differ in
+# compile-time defines, not source: a non-TRACE object has no DOOMX_TRACE
+# instrumentation, so a plain `build/$(VARIANT)` would silently reuse it).
+BUILD := build/$(VARIANT)$(if $(filter 1,$(TRACE)),-trace)
 
 # Variant -> WHD format + feature defines. Shareware packs to WHX (super-tiny,
 # E1 only, no finales); Ultimate/enhanced/DOOM II use the bigger WHD.
