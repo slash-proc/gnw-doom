@@ -55,7 +55,7 @@ static boolean toggle_combo_held(void)
 {
     odroid_gamepad_state_t js;
     gnw_abi()->odroid_input_read_gamepad(&js);
-    return js.values[ODROID_INPUT_X] && js.values[ODROID_INPUT_Y];  // GAME + TIME
+    return js.values[ODROID_INPUT_START] && js.values[ODROID_INPUT_SELECT];  // phys GAME + TIME (retro-go slots)
 }
 
 // Firmware malloc-heap stats now come through the ABI (gnw_abi()->rg_heap_stats),

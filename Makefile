@@ -22,13 +22,13 @@ OBJCOPY = $(CROSS_COMPILE)objcopy
 # (cached) doom.out — otherwise a newer doom.bin from another variant masks it.
 FORCE: ;
 
-# --- external flash slot --------------------------------------------------------
+# --- external flash slots (test-firmware flow only; the payload itself is a
+# RAM overlay and is link-address-independent of these) -----------------------
 EXTFLASH_OFFSET ?= $(shell echo $$(($(EXTFLASH_OFFSET_MB) * 1024 * 1024)))
 EXTFLASH_OFFSET_ALIGNED = $(shell echo $$(($(EXTFLASH_OFFSET) / 4096 * 4096)))
-# Second link base (+1MB) for the relocation-table dual-link diff (gen_reloc_table).
-RELOC_DELTA = 1048576
-ALT_OFFSET  = $(shell echo $$(($(EXTFLASH_OFFSET) + $(RELOC_DELTA))))
-export EXTFLASH_OFFSET_ALIGNED
+# WHD slot: right after the GWHB image slot (image <= 724K RAM overlay).
+WHD_SLOT_OFFSET = 786432
+export EXTFLASH_OFFSET_ALIGNED WHD_SLOT_OFFSET
 
 ENGINE = rp2040-doom
 LINKER = linker.ld
@@ -45,8 +45,9 @@ $(error WAD classification failed for '$(WAD)' — see message above)
 endif
 endif
 OUTBIN := build/$(word 2,$(WADPLAN))
+OUTWHD := $(OUTBIN:.bin=.whd)
 
-doom: $(OUTBIN)
+doom: $(OUTBIN) $(OUTWHD)
 
 # Objects land in build/$(VARIANT)/ — keyed on the variant so switching
 # shareware<->ultimate<->enhanced never reuses stale objects (they differ in
@@ -91,7 +92,7 @@ OPL_SRCS = opl_api.c emu8950.c
 
 GNW_SRCS = main_gnw.c i_video_gnw.c i_sound_gnw.c opl_gnw.c i_system_gnw.c \
     i_timer_gnw.c i_input_gnw.c flash_stub.c stubs.c i_glob.c perf_gnw.c \
-    trace_gnw.c fastmem.c retrogo_persist.c reloc_header.c i_saveg_gnw.c abi_stubs.c gnw_libc.c
+    trace_gnw.c fastmem.c retrogo_persist.c gwhb_entry.c i_saveg_gnw.c abi_stubs.c gnw_libc.c
 
 OBJS  = $(DOOM_SRCS:%.c=$(BUILD)/doom/%.o)
 OBJS += $(SRC_SRCS:%.c=$(BUILD)/src/%.o)
@@ -153,10 +154,16 @@ DEFS_DOOM_TINY = \
 
 DEFS_RENDER = -DPICODOOM_RENDER_NEWHOPE=1 -DMERGE_DISTSCALE0_INTO_VIEWCOSSINANGLE=1
 
+# Present-rate cap (build knob; 35 = doom tic rate). Game logic stays 35 Hz.
+DOOM_MAX_FPS ?= 35
+
 DEFS_GNW = -DPICO_ON_DEVICE=1 -DPICO_BUILD=1 -DNO_USE_MOUSE=1 \
+    -DDOOM_MAX_FPS=$(DOOM_MAX_FPS) \
     -DDOOMX=1 -DDOOMX_SINGLE_CORE=1 -DDOOM_WIDE_PTRS=1 \
     -DDOOM_SAVE_SLOTS=3 -DDOOM_SAVE_AUTONAME=1 \
-    -DEXTFLASH_OFFSET=$(EXTFLASH_OFFSET)
+    -DEXTFLASH_OFFSET=$(EXTFLASH_OFFSET) \
+    -DDOOMX_RUNTIME_WHD=1 -DDOOMX_PCACHE_SECTION=1 -DPATCH_CACHE_BYTES=0x23000 \
+    -DGNW_WHD_PATH='"/roms/homebrew/$(notdir $(basename $(OUTBIN))).whd"' 
 
 DEFS = $(DEFS_SMALL_COMMON) $(DEFS_DOOM_TINY) $(DEFS_RENDER) $(DEFS_GNW) $(FMT_DEFS) $(DEFS_TRACE)
 
@@ -223,16 +230,10 @@ $(BUILD)/wad-cropped.wad: $(WAD) scripts/build/wadwide.py
 $(BUILD)/doom1.wad: $(BUILD)/wad-cropped.wad build-host/whd_gen
 	build-host/whd_gen $< $@ $(WHDFLAGS)
 
-$(BUILD)/doom1_wad.o: $(BUILD)/doom1.wad
-	cd $(BUILD) && $(OBJCOPY) -I binary -O elf32-littlearm -B arm \
-	    --rename-section .data=.wad,alloc,load,readonly,data,contents \
-	    doom1.wad doom1_wad.o
-
 # --- link --------------------------------------------------------------------------
-$(BUILD)/doom.out: $(OBJS) $(LINKER) $(BUILD)/doom1_wad.o
+$(BUILD)/doom.out: $(OBJS) $(LINKER)
 	$(CC) $(CFLAGS) -T $(LINKER) -Wl,-Map=$(BUILD)/main.map -Wl,--gc-sections -o $@ \
-	-Wl,--defsym=EXTFLASH_OFFSET=$(EXTFLASH_OFFSET) \
-	-Wl,--start-group $(OBJS) $(BUILD)/doom1_wad.o -lgcc -Wl,--end-group
+	-Wl,--start-group $(OBJS) -lgcc -Wl,--end-group
 	@if grep -qE "__cxa_|_ZSt|operator new" $(BUILD)/main.map; then \
 	  echo "ERROR: C++ runtime leakage in link map"; exit 1; fi
 	@# Assert the hot renderer functions landed in ITCM (addr < 0x10000), not XIP
@@ -245,20 +246,15 @@ $(BUILD)/doom.out: $(OBJS) $(LINKER) $(BUILD)/doom1_wad.o
 	    echo "ERROR: hot renderer $$f not in ITCM (addr 0x$$a) — fix the .itcram_hot list"; exit 1; fi; \
 	done
 
-# Same objects linked at a second base (+RELOC_DELTA) — the dual-link diff in
-# gen_reloc_table derives the exact relocation table from doom.out vs this.
-$(BUILD)/doom_alt.out: $(OBJS) $(LINKER) $(BUILD)/doom1_wad.o
-	$(CC) $(CFLAGS) -T $(LINKER) -Wl,--gc-sections -o $@ \
-	-Wl,--defsym=EXTFLASH_OFFSET=$(ALT_OFFSET) \
-	-Wl,--start-group $(OBJS) $(BUILD)/doom1_wad.o -lgcc -Wl,--end-group
-
-$(OUTBIN): $(BUILD)/doom.out $(BUILD)/doom_alt.out FORCE
-	$(OBJCOPY) -O binary $(BUILD)/doom.out $(BUILD)/doom_main.bin
-	$(OBJCOPY) -O binary $(BUILD)/doom_alt.out $(BUILD)/doom_alt.bin
-	python3 scripts/build/gen_reloc_table.py $(BUILD)/doom.out \
-	  $(BUILD)/doom_main.bin $(BUILD)/doom_alt.bin $(RELOC_DELTA) $(EXTFLASH_OFFSET) $(OUTBIN)
+# GWHB RAM-overlay image: objcopy of the single link ('GWHB' magic at offset 0,
+# stage-1 copier at +4 — see linker.ld). The WHD ships as a separate file.
+$(OUTBIN): $(BUILD)/doom.out FORCE
+	$(OBJCOPY) -O binary $(BUILD)/doom.out $(OUTBIN)
 	@echo "== $(OUTBIN) ($(VARIANT), $(notdir $(WAD))) =="
 	$(CROSS_COMPILE)size $(BUILD)/doom.out
+
+$(OUTWHD): $(BUILD)/doom1.wad FORCE
+	cp $(BUILD)/doom1.wad $@
 
 -include $(OBJS:.o=.d)
 

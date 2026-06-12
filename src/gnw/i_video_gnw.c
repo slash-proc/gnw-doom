@@ -46,9 +46,29 @@
 
 // Firmware seam
 extern void lcd_set_clut(const uint32_t *clut, uint16_t count);
+
+/* retro-go's lcd_set_clut caches only 32 entries (sized for pico8) + dark
+ * twins — doom needs all 256, so push the full table straight into the LTDC
+ * layer-1 CLUT (CLUTWR: index<<24 | RGB888) after letting the firmware cache
+ * its 32 (keeps the overlay menu's dimming machinery coherent). Re-pushed
+ * after the overlay menu returns (I_ReloadClut, called from abi_stubs.c). */
+static void ltdc_push_clut256(const uint32_t *rgb888)
+{
+    volatile uint32_t *L1CLUTWR = (volatile uint32_t *)0x500010C4;
+    volatile uint32_t *L1CR     = (volatile uint32_t *)0x50001084;
+    volatile uint32_t *SRCR     = (volatile uint32_t *)0x50001024;
+    for (uint32_t i = 0; i < 256; i++)
+        *L1CLUTWR = (i << 24) | (rgb888[i] & 0x00FFFFFFu);
+    *L1CR |= (1u << 4);          /* CLUTEN */
+    *SRCR  = (1u << 1);          /* reload at vertical blanking */
+}
 extern void  lcd_setup_framebuffers(int lcd_mode);
 extern void *lcd_get_active_buffer(void);
 extern void  lcd_swap(void);
+
+#ifndef DOOM_MAX_FPS
+#define DOOM_MAX_FPS 35   /* presents per second; game tics stay 35 Hz */
+#endif
 #define LCD_MODE_LUT8 1
 void I_UpdateSound(void);
 void I_GetEvent(void);
@@ -438,6 +458,7 @@ static void new_frame_init_overlays_palette_and_wipe(void)
             }
             next_pal = -1;
             lcd_set_clut(clut, 256);
+            ltdc_push_clut256(clut);
             // 8bpp path: shared palettes hold Doom palette indices, which do
             // not change with the CLUT — refresh is still cheap, keep it.
             for (int i = 0; i < NUM_SHARED_PALETTES; i++) {
@@ -582,8 +603,10 @@ void I_DisplayFrameReady(void)
 // Called by pd_end_frame where the display_frame_freed wait was. Upstream's
 // 60 Hz scanout throttled presents; without a throttle the loop re-renders
 // duplicate frames between 35 Hz tics (measured 71 fps, half the CPU wasted).
-// Pace presents to the tic rate: 28.571 ms fractional, doomgeneric-style.
-// Idle time feeds the SAI buffer and the perf overlay's CPU%.
+// Pace presents to DOOM_MAX_FPS (default 35 = the tic rate; build with e.g.
+// DOOM_MAX_FPS=70 to experiment — game LOGIC stays at 35 Hz tics, extra
+// frames re-render the same tic). Fractional accumulation keeps the average
+// exact. Idle time feeds the SAI buffer and the perf overlay's CPU%.
 void I_DisplayFrameFreedWait(void)
 {
     void perf_note_idle(int ms);
@@ -606,13 +629,14 @@ void I_DisplayFrameFreedWait(void)
         // Wipe frames present at ~60 Hz like the RP2040's scanout did —
         // at 35 fps the melt ran 1.7x slower than upstream and read as a
         // hitch. Wipe frames are cheap (no 3D render behind them).
-        next_ms += 17;
+        uint32_t wipe_ms = 1000u / DOOM_MAX_FPS;
+        next_ms += (wipe_ms > 17u) ? 17u : wipe_ms;
     } else {
-        next_ms += 28;
-        frac += 4;
-        if (frac >= 7) {
-            frac -= 7;
-            next_ms += 1;   // 28 + 4/7 ms = 1000/35
+        next_ms += 1000u / DOOM_MAX_FPS;
+        frac += 1000u % DOOM_MAX_FPS;
+        if (frac >= DOOM_MAX_FPS) {
+            frac -= DOOM_MAX_FPS;
+            next_ms += 1;
         }
     }
     I_UpdateSound();
@@ -676,4 +700,22 @@ void I_CheckIsScreensaver(void)
 
 void I_DisplayFPSDots(boolean dots_on)
 {
+}
+
+void I_ReloadClut(void)
+{
+    ltdc_push_clut256(I_GetClut());
+}
+
+/* Repaint callback for the firmware's blocking menus (open_pause_menu et al.
+ * redraw the game beneath the dialog through this). compose_frame's overlay
+ * pass CONSUMES the per-frame vpatch lists (vpatch_next / vpatch_doff are
+ * mutated in place), so recomposing without re-running the per-frame init
+ * walks stale lists and overruns the decoder — rebuild them first, exactly
+ * like I_DisplayFrameReady does. */
+void I_RepaintFrame(void)
+{
+    if (display_video_type != VIDEO_TYPE_SAVING)
+        new_frame_init_overlays_palette_and_wipe();
+    compose_frame();
 }

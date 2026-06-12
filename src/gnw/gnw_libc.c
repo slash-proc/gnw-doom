@@ -125,8 +125,21 @@ void snprintf(char *dst, unsigned long size, const char *fmt, ...)
     va_end(ap);
 }
 
-void vprintf(const char *fmt, va_list ap) { (void)fmt; (void)ap; }
-void printf(const char *fmt, ...)         { (void)fmt; }
+/* Route to the firmware's vprintf (retro-go: persistent logbuf, shown on the
+ * BSOD screen — an assert message that vanishes helps nobody). */
+#include "rg_abi.h"
+void vprintf(const char *fmt, va_list ap)
+{
+    if (gnw_abi_ok() && gnw_abi()->vprintf)
+        gnw_abi()->vprintf(fmt, ap);
+}
+void printf(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vprintf(fmt, ap);
+    va_end(ap);
+}
 
 // retro-go (and the toolkit firmware) never implemented sscanf; keep it a no-op so
 // callers fall back to defaults exactly as before.

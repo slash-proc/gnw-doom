@@ -47,6 +47,8 @@ static int16_t *last_active;           // last half filled (detects the DMA flip
 uint32_t snd_max_gap, snd_near_underruns;
 
 extern void audio_start_playing(uint16_t length);
+extern void audio_clear_active_buffer(void);
+extern void audio_clear_inactive_buffer(void);
 extern int16_t *audio_get_active_buffer(void);
 
 static volatile enum {
@@ -289,6 +291,16 @@ static void I_Pico_StopSound(int channel)
     }
 }
 
+// Re-sync after a blocking firmware menu: silence the ring and forget the
+// last refilled half so mixing resumes immediately on the next poll.
+void I_SoundResync(void)
+{
+    if (!sound_initialized) return;
+    audio_clear_active_buffer();
+    audio_clear_inactive_buffer();
+    last_active = 0;
+}
+
 static boolean I_Pico_SoundIsPlaying(int channel)
 {
     if (!check_and_init_channel(channel)) return false;
@@ -397,6 +409,8 @@ static boolean I_Pico_InitSound(boolean _use_sfx_prefix)
 
     last_active = NULL;
     audio_start_playing(AUDIO_LEN);     // firmware ping-pong DMA over 2x AUDIO_LEN
+    audio_clear_active_buffer();        // silence whatever the launcher left in
+    audio_clear_inactive_buffer();      // the ring (the boot "crunch" otherwise)
 
     sound_initialized = true;
     return true;

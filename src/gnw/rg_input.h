@@ -8,6 +8,13 @@
 
 #include <stdint.h>
 
+/* EXACT mirror of real retro-go's enum + struct (offsets/size are ABI: the
+ * firmware fills this through the table). Slot SEMANTICS on the G&W, straight
+ * from retro-go's odroid_input.c:
+ *   START  <- physical GAME      SELECT <- physical TIME
+ *   VOLUME <- physical PAUSE/SET (the overlay/menu trigger; MENU is unused)
+ *   X      <- physical START     Y      <- physical SELECT  (Zelda model)
+ */
 typedef enum {
     ODROID_INPUT_UP = 0,
     ODROID_INPUT_RIGHT,
@@ -17,16 +24,17 @@ typedef enum {
     ODROID_INPUT_START,
     ODROID_INPUT_A,
     ODROID_INPUT_B,
-    ODROID_INPUT_MENU,     // PAUSE/SET (overlay trigger)
-    ODROID_INPUT_VOLUME,   // PAUSE alias
-    ODROID_INPUT_X,        // GAME
-    ODROID_INPUT_Y,        // TIME
+    ODROID_INPUT_MENU,
+    ODROID_INPUT_VOLUME,
+    ODROID_INPUT_POWER,
+    ODROID_INPUT_X,
+    ODROID_INPUT_Y,
     ODROID_INPUT_MAX
-    // NOTE: no POWER — the firmware owns the power button / standby.
 } odroid_input_t;
 
 typedef struct {
     uint8_t values[ODROID_INPUT_MAX];
+    uint16_t bitmask;
 } odroid_gamepad_state_t;
 
 void odroid_input_read_gamepad(odroid_gamepad_state_t *out_state);

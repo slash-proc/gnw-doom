@@ -4,13 +4,17 @@
 // D_PostEvent.
 //
 // Button layout (bit -> Doom key; bindings overridden in I_InputInit):
-//   A          fire; selects/confirms in menus
-//   B          strafe modifier + use (key_strafe and key_use share KEY_RALT)
-//   SELECT     run (key_speed / KEY_RSHIFT) — unmapped from strafe by request
-//   START      open/close menu (KEY_ENTER)
-//   GAME       same as START (deferred tap: half of the overlay combo)
-//   TIME       automap toggle (deferred tap, the combo's other half)
-//   PAUSE+POWER standby
+//   A           fire; selects/confirms in menus
+//   B           tap use, hold run
+//   SELECT      weapon cycle (hold + UP/DOWN for prev/next)
+//   START       strafe modifier
+//   GAME        retro-go: tap-release = pause menu; +A/B save/load; +dpad
+//               volume/brightness; +POWER sleep (common_emu_input_loop owns
+//               it; we swap GAME<->PAUSE slots so GAME drives the firmware UX)
+//   GAME+TIME   held: perf HUD
+//   TIME        tap: automap
+//   PAUSE/SET   doom menu (ESC)
+//   POWER       save-state + sleep (firmware, via common_emu_input_loop)
 //
 
 #include <stdio.h>
@@ -83,6 +87,53 @@ void I_GetEvent(void)
     // firmware-triggered via the handlers we register (odroid_system_emu_init).
     odroid_gamepad_state_t js;
     odroid_input_read_gamepad(&js);
+
+    /* Hand the raw state to retro-go's standard in-game loop FIRST: it owns
+     * PAUSE/SET (pause menu + macros) and bare POWER (save-state + sleep),
+     * and zeroes any input it consumed so doom never sees it. Blocking menus
+     * repaint the frame through I_RepaintFrame. The firmware's dialogs use
+     * their own CLUT slots — restore doom's palette on PAUSE/POWER release. */
+    extern void common_emu_input_loop(void *js, void *game_options, void *repaint);
+    extern void I_RepaintFrame(void);
+    extern void I_ReloadClut(void);
+    /* User mapping: physical GAME drives the firmware UX, physical PAUSE/SET
+     * is doom's menu. retro-go keys its UX off the VOLUME slot (= physical
+     * PAUSE) — swap the two slots before the firmware loop sees them. */
+    { uint8_t t = js.values[ODROID_INPUT_VOLUME];
+      js.values[ODROID_INPUT_VOLUME] = js.values[ODROID_INPUT_START];
+      js.values[ODROID_INPUT_START] = t; }
+
+    extern const uint32_t *I_GetClut(void);
+    extern void lcd_set_clut(const uint32_t *clut, uint16_t count);
+    extern void audio_clear_active_buffer(void);
+    extern void audio_clear_inactive_buffer(void);
+    extern void I_SoundResync(void);
+    /* The firmware UX is edge-driven around the BLOCKING call below: the menu
+     * opens INSIDE common_emu_input_loop on the poll where the button is
+     * RELEASED. So: on press, hand the firmware its expected CLUT layout (its
+     * dialogs use the 32-color cache + dark twins + overlay slots); on the
+     * release poll, silence the DMA ring BEFORE the call (the menu would loop
+     * whatever was mixed while the button was held) and restore doom's
+     * palette + sound pacing AFTER it returns. */
+    static int fw_ui_active;
+    int fw_btn = js.values[ODROID_INPUT_VOLUME] || js.values[ODROID_INPUT_POWER];
+    if (fw_btn && !fw_ui_active) {
+        fw_ui_active = 1;
+        lcd_set_clut(I_GetClut(), 256);
+    }
+    if (!fw_btn && fw_ui_active) {
+        audio_clear_active_buffer();
+        audio_clear_inactive_buffer();
+    }
+    common_emu_input_loop(&js, 0, (void *)I_RepaintFrame);
+    if (!fw_btn && fw_ui_active) {
+        fw_ui_active = 0;
+        I_ReloadClut();
+        I_SoundResync();
+    }
+    /* Slot -> physical, per retro-go's odroid_input.c (see rg_input.h):
+     * X=phys START, SELECT=phys TIME, Y=phys SELECT, START=phys GAME,
+     * VOLUME=phys PAUSE/SET. */
     uint32_t current_buttons =
         ((uint32_t)js.values[ODROID_INPUT_UP]     << 0) |
         ((uint32_t)js.values[ODROID_INPUT_DOWN]   << 1) |
@@ -90,11 +141,11 @@ void I_GetEvent(void)
         ((uint32_t)js.values[ODROID_INPUT_RIGHT]  << 3) |
         ((uint32_t)js.values[ODROID_INPUT_A]      << 4) |
         ((uint32_t)js.values[ODROID_INPUT_B]      << 5) |
-        ((uint32_t)js.values[ODROID_INPUT_START]  << 6) |
-        ((uint32_t)js.values[ODROID_INPUT_Y]      << 7) |   // TIME
-        ((uint32_t)js.values[ODROID_INPUT_SELECT] << 8) |
-        ((uint32_t)js.values[ODROID_INPUT_X]      << 9) |   // GAME
-        ((uint32_t)js.values[ODROID_INPUT_MENU]   << 10);   // PAUSE
+        ((uint32_t)js.values[ODROID_INPUT_X]      << 6) |   // physical START
+        ((uint32_t)js.values[ODROID_INPUT_SELECT] << 7) |   // physical TIME
+        ((uint32_t)js.values[ODROID_INPUT_Y]      << 8) |   // physical SELECT
+        ((uint32_t)js.values[ODROID_INPUT_START]  << 9) |   // phys PAUSE/SET (post-swap)
+        ((uint32_t)js.values[ODROID_INPUT_VOLUME] << 10);   // phys GAME (post-swap; firmware-owned)
 
     uint32_t now  = (uint32_t)systick_cnt;
     extern boolean menuactive;
@@ -107,21 +158,15 @@ void I_GetEvent(void)
     int a     = (current_buttons >> 4) & 1;
     int start = (current_buttons >> 6) & 1;
 
-    // GAME: tap -> firmware overlay; suppressed if it formed the GAME+TIME perf
-    // combo. The overlay blocks, so release held keys + reset edge state first.
+    // PAUSE/SET (arrives in the GAME bit after the slot swap above):
+    // tap -> doom menu (ESC toggle). (The retro-go pause menu lives on GAME.)
     static int game_down, game_combo;
     if (game) {
         if (!game_down) { game_down = 1; game_combo = 0; }
         if (timeb) game_combo = 1;
     } else if (game_down) {
         game_down = 0;
-        if (!game_combo) {
-            for (int i = 0; i < 7; i++)
-                if (last_buttons & (1u << i)) post_key(0, held_key(i));
-            last_buttons = 0;
-            common_ingame_overlay();
-            return;
-        }
+        if (!game_combo) { post_key(1, KEY_ESCAPE); post_key(0, KEY_ESCAPE); }
     }
 
     // TIME: tap -> automap (TAB); suppressed if it formed the GAME+TIME perf combo.
@@ -134,11 +179,6 @@ void I_GetEvent(void)
         if (!time_combo) { post_key(1, KEY_TAB); post_key(0, KEY_TAB); }   // automap
     }
 
-    // PAUSE: in-game "Start" -> open/close the menu (ESC toggles).
-    static int pause_down;
-    if (pause) {
-        if (!pause_down) { pause_down = 1; post_key(1, KEY_ESCAPE); post_key(0, KEY_ESCAPE); }
-    } else pause_down = 0;
 
     // SELECT: tap -> next weapon; hold + UP/DOWN -> prev/next (UP/DOWN stop moving
     // then). key_prevweapon='[', key_nextweapon=']' (bound in I_InputInit).

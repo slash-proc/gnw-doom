@@ -33,9 +33,18 @@ int    toupper(int c)                                        { return A->toupper
 // --- firmware platform services ----------------------------------------------
 void     audio_start_playing(uint16_t len)       { A->audio_start_playing(len); }
 int16_t *audio_get_active_buffer(void)           { return A->audio_get_active_buffer(); }
+void     audio_clear_active_buffer(void)         { A->audio_clear_active_buffer(); }
+void     audio_clear_inactive_buffer(void)       { A->audio_clear_inactive_buffer(); }
 
 void common_ingame_overlay(void)                 { A->common_ingame_overlay(); }
-void odroid_input_read_gamepad(void *out)        { A->odroid_input_read_gamepad(out); }
+/* retro-go's standard in-game UX: PAUSE menu + macros (save/load, volume,
+ * brightness, screenshot) and the bare-POWER save+sleep handler all live in
+ * this loop — feed it the real joystick every input poll (i_input_gnw.c). */
+void common_emu_input_loop(void *js, void *game_options, void *repaint)
+{
+    A->common_emu_input_loop(js, game_options, repaint);
+}
+void odroid_input_read_gamepad(void *out)        { A->wdog_refresh(); A->odroid_input_read_gamepad(out); }
 void odroid_system_switch_app(int app)           { A->odroid_system_switch_app(app); }
 
 // stdio VFS (retro-go's plugin file API; FILE* is opaque void* across the ABI).
@@ -49,7 +58,10 @@ void  lcd_set_clut(const uint32_t *clut, uint16_t count) { A->lcd_set_clut(clut,
 void  lcd_setup_framebuffers(int lcd_mode)   { A->lcd_setup_framebuffers(lcd_mode); }
 void *lcd_get_active_buffer(void)            { return A->lcd_get_active_buffer(); }
 void *lcd_get_inactive_buffer(void)          { return A->lcd_get_inactive_buffer(); }
-void  lcd_swap(void)                         { A->lcd_swap(); }
+/* Watchdog: real retro-go runs a WWDG that emulators refresh every frame;
+ * piggyback on the two calls doom makes constantly (frame swap + input poll)
+ * so the dog stays fed through gameplay, menus, and demo loops. */
+void  lcd_swap(void)                         { A->wdog_refresh(); A->lcd_swap(); }
 
 void odroid_system_emu_init(void *l, void *s, void *ss, void *sd, void *w, void *sr)
 {

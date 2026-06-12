@@ -55,6 +55,79 @@ CMSIS and littlefs.
   not in the tested-working list. Unity re-release WADs (widescreen art) are
   handled automatically (cropped at conversion time).
 
+## Memory map (RAM-overlay model)
+
+The payload is a retro-go homebrew overlay: the launcher copies `doom.bin` to
+`__RAM_EMU_START__` and jumps to the `GWHB` stage-1, which unpacks every
+segment to its final address — **no code executes from external flash and
+nothing is relocated**. The WHD game data is a separate file mapped at runtime
+through the firmware ABI. Numbers below are the Ultimate DOOM build (doom2 is
+identical apart from the WHD). Tunables (all linker-`ASSERT`ed): the ITCM/DTCM
+object lists in `linker.ld`, `PATCH_CACHE_BYTES`, `TEXT_AXIS_ORIGIN`, and
+`DOOM_MAX_FPS`.
+
+```
+══════════════════ ITCM 64K @ 0x00000000 — zero-wait code ══════════════════
+0x00000000 ┌────────────────────────────────────────────┐
+           │ (256 B reserved: optional fw null-guard)    │
+0x00000100 ├────────────────────────────────────────────┤
+           │ .itcram_hot                       58.6K     │  hot-fn list +
+           │   R_Render*, pd_render, p_map,              │  pd_render/p_map/
+           │   p_enemy, p_sight, p_maputl                │  p_enemy/p_sight…
+0x0000EB40 ├────────────────────────────────────────────┤
+           │ free                               5.2K     │  ← ITCM headroom
+0x00010000 └────────────────────────────────────────────┘
+
+══════════════ DTCM 128K @ 0x20000000 — FIRMWARE-OWNED, doom: 0 ═════════════
+0x20000000 ┌────────────────────────────────────────────┐
+           │ fw .data + .bss                  ~16.6K     │  logbuf, HAL state…
+0x200040C0 ├────────────────────────────────────────────┤
+           │ fw malloc heap                      85K     │  FatFS/LFS/dialogs;
+           │                                             │  (apps: dtcm_malloc)
+0x200194C0 ├────────────────────────────────────────────┤
+           │ padding / redzone (256 B)         ~6.9K     │  MPU region 2 guard
+0x2001B000 ├────────────────────────────────────────────┤
+           │ fw stack (doom runs on it)          20K     │  SP ↓ from 0x2001FFF0
+0x20020000 └────────────────────────────────────────────┘
+
+═══════════ AXISRAM 1M @ 0x24000000 — app territory after launch ════════════
+0x24000000 ┌────────────────────────────────────────────┐
+           │ LUT8 framebuffers  2 × 75K         150K     │  UNCACHED (fw MPU
+           │ (+4K LTDC slack to 0x26800)                 │  regions 3–6)
+0x24028000 ├────────────────────────────────────────────┤
+           │ .pcache  patch/texture cache       140K     │  was 320K; perf knob
+0x2404B000 ├────────────────────────────────────────────┤ ← __RAM_EMU_START__
+           │ .gwhb  GWHB magic + stage-1       0.3K      │  image loads here,
+           │ .bss   (overlaps consumed image)   288K     │  bss zeroed after
+0x24093548 ├────────────────────────────────────────────┤  segments copied out
+           │ zone heap (z_zone)               203.4K     │  obs. peak ~210K
+0x240C5000 ├────────────────────────────────────────────┤ ← TEXT_AXIS_ORIGIN
+           │ .text_axis  cold code + rodata   228.7K     │  (7.5K slack)
+0x24100000 └────────────────────────────────────────────┘
+
+═══════ AHBRAM 128K @ 0x30000000 — D2 SRAM, doom's "fast data" tier ═════════
+0x30000000 ┌────────────────────────────────────────────┐
+           │ fw audio DMA ring + .ahb head     ~6.4K     │  UNCACHED (fw rgn 0;
+           │ (rest of 16K subregion unused)              │  doom rgn 7 skips it)
+0x30004000 ├────────────────────────────────────────────┤ ← doom MPU region 7:
+           │ .dtcm_bss  render scratch          86.1K    │   cacheable WBWA
+0x30019864 │ .data      initialized globals      2.5K    │   (survives the fw's
+0x3001A268 │ .text_dtcm warm code tier          19.6K    │   LUT8 MPU rewrite)
+0x3001F0D8 ├────────────────────────────────────────────┤
+           │ free                                3.8K    │
+0x30020000 └────────────────────────────────────────────┘
+
+═════════════════ External flash (XIP @ 0x90000000) ═════════════════════════
+  Real retro-go (SD_CARD=0 example, 64M chip):
+    FrogFS @ +0      (roms/bios/covers; doom.bin 317K, doom.whd 6.9M,
+                      doom2.whd 7.9M) · littlefs @ +54M (10M)
+  Test firmware:     doom.bin @ EXTFLASH_OFFSET · <name>.whd @ +768K
+
+  intflash: retro-go firmware · ABI table @ VTOR+0x400 (gw_firmware_abi_t)
+  Image file = 317K (gwhb+itcm+data+text_dtcm+text_axis LMAs chained at
+  0x2404B000); stage-1 unpacks ITCM/AHB/AXITEXT, then .bss zeroing retires it.
+```
+
 ## Repo structure (for devs)
 
 ```
